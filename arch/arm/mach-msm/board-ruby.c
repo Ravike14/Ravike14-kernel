@@ -4334,25 +4334,25 @@ static struct i2c_board_info i2c_akm8975_devices[] = {
 
 static struct mpu3050_platform_data mpu3050_data = {
 	.int_config = 0x10,
-	.orientation = { 1, 0, 0,
+	.orientation = { -1, 0, 0,
 			 0, 1, 0,
-			 0, 0, 1 },
+			 0, 0, -1 },
 	.level_shifter = 0,
 
 	.accel = {
 		.get_slave_descr = get_accel_slave_descr,
-		.adapt_num = MSM_GSBI10_QUP_I2C_BUS_ID, 
+		.adapt_num = MSM_GSBI12_QUP_I2C_BUS_ID, 
 		.bus = EXT_SLAVE_BUS_SECONDARY,
 		.address = 0x30 >> 1,
-			.orientation = { -1, 0, 0,
+			.orientation = { 1, 0, 0,
 					  0, 1, 0,
-					  0, 0, -1 },
+					  0, 0, 1 },
 
 	},
 
 	.compass = {
 		.get_slave_descr = get_compass_slave_descr,
-		.adapt_num = MSM_GSBI10_QUP_I2C_BUS_ID, 
+		.adapt_num = MSM_GSBI12_QUP_I2C_BUS_ID, 
 		.bus = EXT_SLAVE_BUS_PRIMARY,
 		.address = 0x1A >> 1,
 			.orientation = { 1, 0, 0,
