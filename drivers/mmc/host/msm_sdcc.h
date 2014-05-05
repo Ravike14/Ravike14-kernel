@@ -484,4 +484,8 @@ static inline int msmsdcc_lpm_disable(struct mmc_host *mmc)
 }
 #endif
 
+#ifdef CONFIG_TIWLAN_POWER_CONTROL_FUNC
+extern int ti_wifi_power(int on);
+#endif
+
 #endif
