@@ -28,6 +28,7 @@
 
 #include <mach/board.h>
 #include <mach/msm_iomap.h>
+#include "timer.h"
 
 static void __init msm8x60_fixup(struct tag *tag, char **cmdline,
 		struct meminfo *mi)
