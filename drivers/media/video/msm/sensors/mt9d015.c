@@ -1509,7 +1509,7 @@ static struct platform_driver msm_camera_driver = {
 
 static int __init mt9d015_init(void)
 {
-	pr_info("mt9v113_init\n");
+	pr_info("mt9d015_init\n");
 	return i2c_add_driver(&mt9d015_i2c_driver);
 }
 
