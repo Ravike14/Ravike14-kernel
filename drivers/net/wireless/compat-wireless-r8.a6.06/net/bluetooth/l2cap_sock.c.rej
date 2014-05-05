@@ -1,0 +1,15 @@
+--- net/bluetooth/l2cap_sock.c
++++ net/bluetooth/l2cap_sock.c
+@@ -1059,12 +1052,8 @@
+ 	return sk;
+ }
+ 
+-#if defined(CONFIG_COMPAT_BT_SOCK_CREATE_NEEDS_KERN)
+ static int l2cap_sock_create(struct net *net, struct socket *sock, int protocol,
+ 			     int kern)
+-#else
+-static int l2cap_sock_create(struct net *net, struct socket *sock, int protocol)
+-#endif
+ {
+ 	struct sock *sk;
+ 

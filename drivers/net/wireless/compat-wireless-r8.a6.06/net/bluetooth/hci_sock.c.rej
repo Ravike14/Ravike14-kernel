@@ -1,0 +1,15 @@
+--- net/bluetooth/hci_sock.c
++++ net/bluetooth/hci_sock.c
+@@ -1063,12 +1059,8 @@
+ 	.obj_size	= sizeof(struct hci_pinfo)
+ };
+ 
+-#if defined(CONFIG_COMPAT_BT_SOCK_CREATE_NEEDS_KERN)
+ static int hci_sock_create(struct net *net, struct socket *sock, int protocol,
+ 			   int kern)
+-#else
+-static int hci_sock_create(struct net *net, struct socket *sock, int protocol)
+-#endif
+ {
+ 	struct sock *sk;
+ 
