@@ -1,5 +1,4 @@
 /* Copyright (c) 2010-2012, Code Aurora Forum. All rights reserved.
- * Copyright (c) 2013 Ravishka Fernando <rn.fernando3@gmail.com>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -47,6 +46,8 @@
 #define SNDDEV_VREG_LOW_POWER_LOAD (36000)
 #define SNDDEV_VREG_HIGH_POWER_LOAD (56000)
 
+#ifdef CONFIG_MACH_RUBY
+
 #undef pr_info
 #undef pr_err
 #define pr_info(fmt, ...) pr_aud_info(fmt, ##__VA_ARGS__)
@@ -61,6 +62,8 @@ static struct q6v2audio_icodec_ops default_audio_ops;
 static struct q6v2audio_icodec_ops *audio_ops = &default_audio_ops;
 static struct q6v2audio_aic3254_ops default_aic3254_ops;
 static struct q6v2audio_aic3254_ops *aic3254_ops = &default_aic3254_ops;
+#endif
+
 
 #ifndef CONFIG_MACH_RUBY 
 struct snddev_icodec_state {
@@ -150,7 +153,7 @@ static int msm_snddev_rx_mclk_request(void)
 {
 	int rc = 0;
 
-#ifndef CONFIG_MACH_VILLEC2
+#ifndef CONFIG_MACH_RUBY
 	rc = gpio_request(the_msm_cdcclk_ctl_state.rx_mclk,
 		"MSM_SNDDEV_RX_MCLK");
 	if (rc < 0) {
@@ -165,7 +168,7 @@ static int msm_snddev_tx_mclk_request(void)
 {
 	int rc = 0;
 
-#ifndef CONFIG_MACH_VILLEC2
+#ifndef CONFIG_MACH_RUBY
 	rc = gpio_request(the_msm_cdcclk_ctl_state.tx_mclk,
 		"MSM_SNDDEV_TX_MCLK");
 	if (rc < 0) {
@@ -194,7 +197,6 @@ static void msm_snddev_tx_mclk_free(void)
 	}
 #endif
 }
-
 static int get_msm_cdcclk_ctl_gpios(struct platform_device *pdev)
 {
 	int rc = 0;
@@ -239,6 +241,7 @@ static struct platform_driver msm_cdcclk_ctl_driver = {
 
 static int snddev_icodec_open_lb(struct snddev_icodec_state *icodec)
 {
+	int trc;
 	struct snddev_icodec_drv_state *drv = &snddev_icodec_drv;
 
 	if (drv->snddev_vreg)
@@ -247,6 +250,17 @@ static int snddev_icodec_open_lb(struct snddev_icodec_state *icodec)
 
 	if (icodec->data->voltage_on)
 		icodec->data->voltage_on();
+
+	trc = adie_codec_open(icodec->data->profile, &icodec->adie_path);
+	if (IS_ERR_VALUE(trc))
+		pr_err("%s: adie codec open failed\n", __func__);
+	else
+		adie_codec_setpath(icodec->adie_path,
+					icodec->sample_rate, 256);
+
+	if (icodec->adie_path)
+		adie_codec_proceed_stage(icodec->adie_path,
+					ADIE_CODEC_DIGITAL_ANALOG_READY);
 
 	if (icodec->data->pamp_on)
 		icodec->data->pamp_on();
@@ -547,6 +561,13 @@ static int snddev_icodec_close_lb(struct snddev_icodec_state *icodec)
 	if (drv->snddev_vreg)
 		vreg_mode_vote(drv->snddev_vreg, 0, SNDDEV_LOW_POWER_MODE);
 
+	if (icodec->adie_path) {
+		adie_codec_proceed_stage(icodec->adie_path,
+			ADIE_CODEC_DIGITAL_OFF);
+		adie_codec_close(icodec->adie_path);
+		icodec->adie_path = NULL;
+	}
+
 	if (icodec->data->voltage_off)
 		icodec->data->voltage_off();
 
@@ -569,8 +590,8 @@ static int snddev_icodec_close_rx(struct snddev_icodec_state *icodec)
    if (support_aic3254) {
 	if (icodec->data->aic3254_id != icodec->data->default_aic3254_id)
 		icodec->data->aic3254_id = icodec->data->default_aic3254_id;
-	
-	
+
+
 	if (aic3254_ops->aic3254_set_mode)
 		aic3254_ops->aic3254_set_mode(AIC3254_CONFIG_RX, DOWNLINK_OFF);
       }
@@ -591,7 +612,7 @@ static int snddev_icodec_close_rx(struct snddev_icodec_state *icodec)
 	clk_disable_unprepare(drv->rx_bitclk);
 	clk_disable_unprepare(drv->rx_osrclk);
 
-    msm_snddev_rx_mclk_free();
+	msm_snddev_rx_mclk_free();
 
 	icodec->enabled = 0;
 
@@ -629,7 +650,7 @@ if (icodec->adie_path) {
 	clk_disable_unprepare(drv->tx_bitclk);
 	clk_disable_unprepare(drv->tx_osrclk);
 
-     msm_snddev_tx_mclk_free();
+	msm_snddev_tx_mclk_free();
 
 	if (icodec->data->pamp_off)
 		icodec->data->pamp_off();
@@ -705,8 +726,8 @@ static int snddev_icodec_open(struct msm_snddev_info *dev_info)
 				SNDDEV_DEV_VOL_DIGITAL |
 				SNDDEV_DEV_VOL_ANALOG)))
 				rc = snddev_icodec_set_device_volume_impl(
-					dev_info, dev_info->dev_volume);
-			if (!IS_ERR_VALUE(rc)) 
+						dev_info, dev_info->dev_volume);
+			if (!IS_ERR_VALUE(rc))
 				drv->rx_active = 1;
 			else
 				pr_err("%s: set_device_volume_impl"
@@ -742,7 +763,7 @@ static int snddev_icodec_open(struct msm_snddev_info *dev_info)
 				SNDDEV_DEV_VOL_DIGITAL |
 				SNDDEV_DEV_VOL_ANALOG)))
 				rc = snddev_icodec_set_device_volume_impl(
-					dev_info, dev_info->dev_volume);
+						dev_info, dev_info->dev_volume);
 			if (!IS_ERR_VALUE(rc))
 				drv->tx_active = 1;
 			else
@@ -997,10 +1018,12 @@ int snddev_icodec_set_device_volume(struct msm_snddev_info *dev_info,
 	return rc;
 }
 
+#ifdef CONFIG_MACH_RUBY
 void htc_8x60_register_icodec_ops(struct q6v2audio_icodec_ops *ops)
 {
 	audio_ops = ops;
 }
+#endif
 
 static int snddev_icodec_probe(struct platform_device *pdev)
 {
@@ -1008,7 +1031,9 @@ static int snddev_icodec_probe(struct platform_device *pdev)
 	struct snddev_icodec_data *pdata;
 	struct msm_snddev_info *dev_info;
 	struct snddev_icodec_state *icodec;
+#ifdef CONFIG_MACH_RUBY
 	static int first_time = 1;
+#endif
 
 	if (!pdev || !pdev->dev.platform_data) {
 		printk(KERN_ALERT "Invalid caller\n");
@@ -1059,6 +1084,7 @@ static int snddev_icodec_probe(struct platform_device *pdev)
 	} else {
 		dev_info->dev_ops.enable_anc = NULL;
 	}
+#ifdef CONFIG_MACH_RUBY
 	if (first_time) {
 		if (audio_ops->support_aic3254)
 			support_aic3254 = audio_ops->support_aic3254();
@@ -1094,7 +1120,7 @@ static int snddev_icodec_probe(struct platform_device *pdev)
 
 		first_time = 0;
 	}
-
+#endif
 error:
 	return rc;
 }
@@ -1110,6 +1136,7 @@ static struct platform_driver snddev_icodec_driver = {
   .driver = { .name = "snddev_icodec" }
 };
 
+#ifdef CONFIG_MACH_RUBY 
 void htc_8x60_register_aic3254_ops(struct q6v2audio_aic3254_ops *ops)
 {
 	aic3254_ops = ops;
@@ -1136,6 +1163,7 @@ int update_aic3254_info(struct aic3254_info *info)
 
 	return rc;
 }
+#endif 
 
 module_param(msm_codec_i2s_slave_mode, bool, 0);
 MODULE_PARM_DESC(msm_codec_i2s_slave_mode, "Set MSM to I2S slave clock mode");

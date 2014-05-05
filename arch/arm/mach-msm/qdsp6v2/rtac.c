@@ -25,10 +25,12 @@
 #include "q6audio_common.h"
 #include <sound/q6afe.h>
 
+#ifdef CONFIG_MACH_RUBY
 #undef pr_info
 #undef pr_err
 #define pr_info(fmt, ...) pr_aud_info(fmt, ##__VA_ARGS__)
 #define pr_err(fmt, ...) pr_aud_err(fmt, ##__VA_ARGS__)
+#endif
 
 #ifndef CONFIG_RTAC
 
