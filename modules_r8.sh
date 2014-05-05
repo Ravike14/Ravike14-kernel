@@ -31,6 +31,7 @@ cp $SW_DIR/drivers/net/wireless/wl12xx/wl12xx_sdio.ko $ROOT/MODULES_R8/.
 cp $SW_DIR/net/mac80211/mac80211.ko $ROOT/MODULES_R8/.
 cp $SW_DIR/net/wireless/cfg80211.ko $ROOT/MODULES_R8/.
 
+
 #
 # since i've implanted more updated and working compat-wireless BT drivers 
 # to the kernel itself no need for the compat-wireless source ones
