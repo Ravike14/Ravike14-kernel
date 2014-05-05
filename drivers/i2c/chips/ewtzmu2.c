@@ -2,6 +2,7 @@
  *
  * Copyright (C) 2011 Prolific Technology Inc.
  * Author: Kyle Chen
+ * Modified and Ported by Ravishka Fernando <rn.fernando3@gmail.com>
  *
  * This software is licensed under the terms of the GNU General Public
  * License version 2, as published by the Free Software Foundation, and
@@ -16,7 +17,6 @@
 
 #define HTC_VERSION  1
 
-#include <linux/module.h>
 #include <linux/interrupt.h>
 #include <linux/i2c.h>
 #include <linux/slab.h>
@@ -32,18 +32,23 @@
 #include <linux/poll.h>
 #include <linux/gpio.h>
 #include <linux/akm8975.h>
+#include <linux/module.h>
 
 #ifndef HTC_VERSION
 #include <linux/i2c/ak8973.h>
 #endif
 
 int debug_flag;
+
+
 #define D(x...) printk(KERN_DEBUG "[GYRO][PANASONIC] " x)
 #define I(x...) printk(KERN_INFO "[GYRO][PANASONIC] " x)
 #define E(x...) printk(KERN_ERR "[GYRO][PANASONIC ERROR] " x)
+#define W(x...) printk(KERN_WARNING "[GYRO][PANASONIC WARN] " x)
 #define DIF(x...) { \
 	if (debug_flag) \
 		printk(KERN_DEBUG "[GYRO][PANASONIC DEBUG] " x); }
+#define NACK_LIMIT 10
 
 #define EWTZMU_DRV_NAME         "ewtzmu2"
 #define DRIVER_VERSION          "1.0.0.2"
@@ -52,6 +57,9 @@ struct device_attribute dev_attr_##_name = __ATTR(_name, _mode, _show, _store)
 
 static struct i2c_client *ewtzmu_i2c_client;
 int Gyro_samplerate_status = 1;
+static DECLARE_WAIT_QUEUE_HEAD(open_wq);
+static atomic_t open_flag;
+static bool Gyro_init_fail = 0;
 
 struct _ewtzmu_data {
 	rwlock_t lock;
@@ -94,6 +102,9 @@ struct _ewtzmumid_data {
 	struct device *gyro_dev;
 	void (*config_gyro_diag_gpios)(bool enable);
 	int sleep_pin;
+#ifdef FORCE_POWER_OFF
+	int (*power_off)(int enable);
+#endif
 } ewtzmumid_data;
 
 struct ewtzmu_i2c_data {
@@ -192,24 +203,14 @@ static int EWTZMU2_I2C_Write(int reg_addr, int buf_len, int *buf)
 		__func__, reg_addr, buf_len);
 	return 1;
 }
-/*
-static int EWTZMU2_Chipset_Init_read(void)
+static int EWTZMU2_GetOpenStatus(void)
 {
-	int ctrl = 0;
-
-	EWTZMU2_I2C_Read(EWTZMU_REG_PWR_MGM, 1, &ctrl);
-	I("EWTZMU_REG_PWR_MGM ret value=0x%x\n", ctrl);
-	EWTZMU2_I2C_Read(EWTZMU_INT, 1, &ctrl);
-	I("EWTZMU_INT ret value=0x%x\n", ctrl);
-	EWTZMU2_I2C_Read(EWTZMU_DLPF, 1, &ctrl);
-	I("EWTZMU_DLPF ret value=0x%x\n", ctrl);
-	EWTZMU2_I2C_Read(EWTZMU_SMPL, 1, &ctrl);
-	I("EWTZMU_SMPL ret value=0x%x\n", ctrl);
-	EWTZMU2_I2C_Read(EWTZMU_FIFO_CTR, 1, &ctrl);
-	I("EWTZMU_FIFO_CTR ret value=0x%x\n", ctrl);
-	return 0;
+	I("%s:\n", __func__);
+	wait_event_interruptible(open_wq, (atomic_read(&open_flag) > 0));
+	I("%s:wait OK\n", __func__);
+	return atomic_read(&open_flag);
 }
-*/
+
 static int EWTZMU2_Chipset_Init(void)
 {
 	u8 databuf[10];
@@ -256,9 +257,11 @@ static int EWTZMU2_Chipset_Init(void)
 		goto exit_EWTZMU2_Chipset_Init;
 
 	I("init chipset: ret value=%d\n", res);
+	Gyro_init_fail = 0;
 exit_EWTZMU2_Chipset_Init:
 	if (res <= 0) {
 	E("Fail to init chipset(I2C error): ret value=%d\n", res);
+	Gyro_init_fail = 1;
 	return -1;
 	}
 	return 0;
@@ -270,8 +273,8 @@ static int EWTZMU2_Chip_Set_SampleRate(int sample_rate_state)
 	int res = 0;
 
 	I("sample_rate_state=%d\n", sample_rate_state);
-	if (gpio_get_value(ewtzmumid_data.sleep_pin) == 1) {/*sleep*/
-			I("Dont set sample_rate_state=%d, when gyro sleep\n", sample_rate_state);
+	if (gpio_get_value(ewtzmumid_data.sleep_pin) == 1) {
+		I("Dont set sample_rate_state=%d, when gyro sleep\n", sample_rate_state);
 		Gyro_samplerate_status = sample_rate_state;
 		return 0;
 	}
@@ -309,7 +312,7 @@ static int EWTZMU2_Chip_Set_SampleRate(int sample_rate_state)
 
 exit_EWTZMU2_Chip_Set_SampleRate:
 	if (res <= 0) {
-	E("Fail to init chipset(I2C error): ret value=%d\n", res);
+		E("Fail to init chipset(I2C error): ret value=%d\n", res);
 		return -1;
 	}
 	return 0;
@@ -341,7 +344,6 @@ static int EWTZMU2_WIA(char *wia, int bufsize)
 	return 0;
 }
 
-/*no use*/
 static int EWTZMU2_ReadSensorData(char *buf, int bufsize)
 {
 	char cmd;
@@ -351,11 +353,11 @@ static int EWTZMU2_ReadSensorData(char *buf, int bufsize)
 	int res = EW_DRV_SUCCESS;
 
 	if ((!buf) || (bufsize <= 80))
-	return EW_BUFFER_PARAMS;/*-1;*/
+	return EW_BUFFER_PARAMS;
 
 	if (!ewtzmu_i2c_client) {
 		*buf = 0;
-		return EW_CLIENT_ERROR;/*-2;*/
+		return EW_CLIENT_ERROR;
 	}
 
 	read_lock(&ewtzmu_data.lock);
@@ -363,7 +365,7 @@ static int EWTZMU2_ReadSensorData(char *buf, int bufsize)
 	read_unlock(&ewtzmu_data.lock);
 
 	gyrox = gyroy = gyroz = 0;
-	/* We can read all measured data in once*/
+	
 	cmd = EWTZMU_REG_GYROX_H;
 	res = i2c_master_send(ewtzmu_i2c_client, &cmd, 1);
 	if (res <= 0)
@@ -372,7 +374,7 @@ static int EWTZMU2_ReadSensorData(char *buf, int bufsize)
 	res = i2c_master_recv(ewtzmu_i2c_client, &(databuf[0]), 6);
 	if (res <= 0)
 		goto exit_EWTZMU2_ReadSensorData;
-	/*gxh, gx1, gyh, gyl, gzh, gzl*/
+	
 	gyrox = (databuf[0] << 8) | databuf[1];
 	if (gyrox > 32768)
 		gyrox -= 65536;
@@ -394,6 +396,7 @@ exit_EWTZMU2_ReadSensorData:
 	return res;
 }
 
+static int NACK_count;
 
 static int EWTZMU2_ReadSensorDataFIFO(unsigned char *buf, int bufsize)
 {
@@ -401,6 +404,9 @@ static int EWTZMU2_ReadSensorDataFIFO(unsigned char *buf, int bufsize)
 	int mode = 0;
 	unsigned char databuf[200];
 	int res = EW_DRV_SUCCESS, databyte = 6;
+
+	if (NACK_count >= NACK_LIMIT)
+		return EW_CLIENT_ERROR;
 
 	if ((!buf) || (bufsize < 121))
 		return EW_BUFFER_PARAMS;
@@ -420,16 +426,16 @@ static int EWTZMU2_ReadSensorDataFIFO(unsigned char *buf, int bufsize)
 		goto exit_EWTZMU2_ReadSensorDataFIFO;
 	udelay(20);
 
-	if (Gyro_samplerate_status == 0) {/*100HZ*/
+	if (Gyro_samplerate_status == 0) {
 		databyte = 6;
 		res = i2c_master_recv(ewtzmu_i2c_client, &(databuf[0]), 6);
-	} else if (Gyro_samplerate_status == 1) {/*50HZ*/
+	} else if (Gyro_samplerate_status == 1) {
 		databyte = 12;
 		res = i2c_master_recv(ewtzmu_i2c_client, &(databuf[0]), 12);
-	} else if (Gyro_samplerate_status == 2) {/*16HZ*/
+	} else if (Gyro_samplerate_status == 2) {
 		databyte = 36;
 		res = i2c_master_recv(ewtzmu_i2c_client, &(databuf[0]), 36);
-	} else if (Gyro_samplerate_status == 3) {/*5HZ*/
+	} else if (Gyro_samplerate_status == 3) {
 		databyte = 120;
 		res = i2c_master_recv(ewtzmu_i2c_client, &(databuf[0]), 120);
 	}
@@ -438,7 +444,9 @@ static int EWTZMU2_ReadSensorDataFIFO(unsigned char *buf, int bufsize)
 		goto exit_EWTZMU2_ReadSensorDataFIFO;
 exit_EWTZMU2_ReadSensorDataFIFO:
 	if (res <= 0) {
-	E("Fail to read sensor data(I2C error): ret value=%d\n", res);
+		E("%s: Fail to read sensor data(I2C error): ret value=%d\n", __func__, res);
+		if ((++NACK_count) == NACK_LIMIT)
+			W("%s: NACK_count = %d\n", __func__, NACK_count);
 		res = EW_I2C_ERROR;
 	} else {
 		memcpy(&(buf[1]), databuf, databyte);
@@ -603,83 +611,138 @@ static int EWTZMU2_ReadGravity(char *buf, int bufsize)
 	read_unlock(&ewtzmumid_data.datalock);
 	return 0;
 }
+int EWTZMU2_Report_Value_akm(int ifirst, int x, int y, int z)
+{
+	struct ewtzmu_i2c_data *data;
+	static int report_times;
+	static int x_data, y_data, z_data;
 
-static int EWTZMU2_Report_Value(void)
+	if (Gyro_init_fail) {
+		E("%s  error, init fail. do nothing\n", __func__);
+		return -1;
+	}
+
+	if (!ewtzmu_i2c_client) {
+		E("%s  error, ewtzmu_i2c_client = NULL\n", __func__);
+		return -1;
+	}
+	data = i2c_get_clientdata(ewtzmu_i2c_client);
+	if (ifirst == 1) {
+		if (x == x_data) {
+			x = x_data+1;
+			I("a_status : gsensor data x data same, so +1 : %d, %d \n", x, x_data);
+		}
+
+		if (y == y_data) {
+			y = y_data+1;
+			I("a_status : gsensor data y data same, so +1 : %d, %d \n", y, y_data);
+		}
+
+		if (z == z_data) {
+			z = z_data+1;
+			I("a_status : gsensor data z data same, so +1 : %d, %d \n", z, z_data);
+		}
+		I("a_status : first gsensor data: %d, %d, %d\n", x, z, y);
+	}
+	x_data = x;
+	y_data = y;
+	z_data = z;
+
+	report_times++;
+	if (report_times > ((200 - (Gyro_samplerate_status * 50)) / (1 + Gyro_samplerate_status))) {
+		I("a_status : gsensor data: %d, %d, %d\n", x, z, y);
+		report_times = 0;
+	}
+	input_report_abs(data->input_dev_compass, ABS_X, x);
+	input_report_abs(data->input_dev_compass, ABS_Y, y);
+	input_report_abs(data->input_dev_compass, ABS_Z, z);
+	input_sync(data->input_dev_compass);
+
+	return 0;
+}
+
+int EWTZMU2_Report_Value(void)
 {
 	struct ewtzmu_i2c_data *data = i2c_get_clientdata(ewtzmu_i2c_client);
 	int report_enable = 0;
-	static int report_times;
+	static int report_gyro_times;
+	static int report_pitch_times;
+	static int report_rota_times;
 
 	DIF("EWTZMU2_Report_Value\n");
 	if (atomic_read(&o_status) && m_o_times) {
-	DIF("EWTZMU2_Report_Value o_status, pitch %d, roll %d, , yaw %d\n",
-	ewtzmumid_data.pitch, ewtzmumid_data.roll, ewtzmumid_data.yaw);
-	input_report_abs(data->input_dev_compass, ABS_RX, ewtzmumid_data.yaw);/* yaw */
-	input_report_abs(data->input_dev_compass, ABS_RY, ewtzmumid_data.pitch);/* pitch */
-	input_report_abs(data->input_dev_compass, ABS_RZ, ewtzmumid_data.roll);/* roll */
-	input_report_abs(data->input_dev_compass, ABS_RUDDER, ewtzmumid_data.status);/* status of orientation sensor */
-	report_enable = EW_REPORT_EN_COMPASS;
-	}
-	if (atomic_read(&a_status)) {
-		report_times++;
-		if (report_times > ((200 - (Gyro_samplerate_status * 50)) / (1 + Gyro_samplerate_status))) {
-		I("a_status : gsensor data: %d, %d, %d\n", ewtzmumid_data.na.x,
-			-ewtzmumid_data.na.z, ewtzmumid_data.na.y);
-		report_times = 0;
-	}
-	input_report_abs(data->input_dev_compass, ABS_X, ewtzmumid_data.na.x);/* x-axis raw acceleration */
-	input_report_abs(data->input_dev_compass, ABS_Y, ewtzmumid_data.na.y);/* y-axis raw acceleration */
-	input_report_abs(data->input_dev_compass, ABS_Z, ewtzmumid_data.na.z);/* z-axis raw acceleration */
-	report_enable = EW_REPORT_EN_COMPASS;
+		report_pitch_times++;
+		if (report_pitch_times > ((200 - (Gyro_samplerate_status * 50)) / (1 + Gyro_samplerate_status))) {
+			I("o_status, pitch %d, roll %d, , yaw %d\n",
+				ewtzmumid_data.pitch, ewtzmumid_data.roll, ewtzmumid_data.yaw);
+			report_pitch_times = 0;
+		}
+		DIF("EWTZMU2_Report_Value o_status, pitch %d, roll %d, , yaw %d\n",
+		ewtzmumid_data.pitch, ewtzmumid_data.roll, ewtzmumid_data.yaw);
+		input_report_abs(data->input_dev_compass, ABS_RX, ewtzmumid_data.yaw);
+		input_report_abs(data->input_dev_compass, ABS_RY, ewtzmumid_data.pitch);
+		input_report_abs(data->input_dev_compass, ABS_RZ, ewtzmumid_data.roll);
+		input_report_abs(data->input_dev_compass, ABS_RUDDER, ewtzmumid_data.status);
+				
+		report_enable = EW_REPORT_EN_COMPASS;
 	}
 
 	if (atomic_read(&m_status)) {
 		DIF("EWTZMU2_Report_Value m_status\n ");
 		input_report_abs(data->input_dev_compass,
-		ABS_HAT0X, ewtzmumid_data.nm.x);/* x-axis of raw magnetic vector */
+		ABS_HAT0X, ewtzmumid_data.nm.x);
 	input_report_abs(data->input_dev_compass,
-	 ABS_HAT0Y, ewtzmumid_data.nm.y);/* y-axis of raw magnetic vector */
+	 ABS_HAT0Y, ewtzmumid_data.nm.y);
 	input_report_abs(data->input_dev_compass, ABS_BRAKE,
-	ewtzmumid_data.nm.z);/* z-axis of raw magnetic vector */
+	ewtzmumid_data.nm.z);
 	input_report_abs(data->input_dev_compass, ABS_WHEEL,
-	ewtzmumid_data.status);/* status of magnetic sensor */
+	ewtzmumid_data.status);
 	report_enable = EW_REPORT_EN_COMPASS;
 	}
 	if (atomic_read(&rv_status)) {
+		report_rota_times++;
+		if (report_rota_times > ((200 - (Gyro_samplerate_status * 50)) / (1 + Gyro_samplerate_status))) {
+			I("rv_status, %d, %d, %d, %d\n ",
+			 ewtzmumid_data.rotationvector[0],
+			ewtzmumid_data.rotationvector[1],
+			ewtzmumid_data.rotationvector[2],
+			ewtzmumid_data.rotationvector[3]);
+			report_rota_times = 0;
+		}
 		DIF("EWTZMU2_Report_Value rv_status, %d, %d, %d, %d\n ",
 			 ewtzmumid_data.rotationvector[0],
 			ewtzmumid_data.rotationvector[1],
 			ewtzmumid_data.rotationvector[2],
 			ewtzmumid_data.rotationvector[3]);
 		input_report_abs(data->input_dev_compass, ABS_HAT3X,
-		ewtzmumid_data.rotationvector[0]);/* x-axis of rotation vector */
+		ewtzmumid_data.rotationvector[0]);
 		input_report_abs(data->input_dev_compass, ABS_HAT3Y,
-		ewtzmumid_data.rotationvector[1]);/* y-axis of rotation vectorn */
+		ewtzmumid_data.rotationvector[1]);
 		input_report_abs(data->input_dev_compass, ABS_TILT_X,
-		ewtzmumid_data.rotationvector[2]);/* z-axis of rotation vector */
+		ewtzmumid_data.rotationvector[2]);
 		input_report_abs(data->input_dev_compass, ABS_TILT_Y,
-		ewtzmumid_data.rotationvector[3]);/* theta of rotation vector */
+		ewtzmumid_data.rotationvector[3]);
 		report_enable = EW_REPORT_EN_COMPASS;
 	}
 	if (atomic_read(&la_status)) {
 		DIF("EWTZMU2_Report_Value la_status\n ");
 		input_report_abs(data->input_dev_compass, ABS_HAT1X,
-		ewtzmumid_data.linear_accel.x);/* x-axis of linear acceleration */
+		ewtzmumid_data.linear_accel.x);
 		input_report_abs(data->input_dev_compass, ABS_HAT1Y,
-		ewtzmumid_data.linear_accel.y);/* y-axis of linear acceleration */
+		ewtzmumid_data.linear_accel.y);
 		input_report_abs(data->input_dev_compass, ABS_TOOL_WIDTH,
-		ewtzmumid_data.linear_accel.z);/* z-axis of linear acceleration */
+		ewtzmumid_data.linear_accel.z);
 		report_enable = EW_REPORT_EN_COMPASS;
 	}
 
 	if (atomic_read(&gv_status)) {
 		DIF("EWTZMU2_Report_Value gv_status\n ");
 		input_report_abs(data->input_dev_compass, ABS_HAT2X,
-		ewtzmumid_data.gravity.x);/* x-axis of gravityr */
+		ewtzmumid_data.gravity.x);
 		input_report_abs(data->input_dev_compass, ABS_HAT2Y,
-		ewtzmumid_data.gravity.y);/* y-axis of gravity */
+		ewtzmumid_data.gravity.y);
 		input_report_abs(data->input_dev_compass, ABS_VOLUME,
-		ewtzmumid_data.gravity.z);/* z-axis of gravity */
+		ewtzmumid_data.gravity.z);
 		report_enable = EW_REPORT_EN_COMPASS;
 	}
 
@@ -691,13 +754,21 @@ static int EWTZMU2_Report_Value(void)
 	}
 
 	if (atomic_read(&g_status)) {
-	DIF("EWTZMU2_Report_Value g_status\n, ");
+		report_gyro_times++;
+		if (report_gyro_times > ((200 - (Gyro_samplerate_status * 50)) / (1 + Gyro_samplerate_status))) {
+			I("gyro_status, %d, %d, %d\n ",
+			 ewtzmumid_data.gyro.x,
+			ewtzmumid_data.gyro.y,
+			ewtzmumid_data.gyro.z);
+			report_gyro_times = 0;
+		}
+		DIF("EWTZMU2_Report_Value g_status\n, ");
 		input_report_rel(data->input_dev_gyroscope, REL_RX,
-		ewtzmumid_data.gyro.x);/* x-axis of gyro sensor */
+		ewtzmumid_data.gyro.x);
 		input_report_rel(data->input_dev_gyroscope, REL_RY,
-		ewtzmumid_data.gyro.y);/* y-axis of gyro sensor */
+		ewtzmumid_data.gyro.y);
 		input_report_rel(data->input_dev_gyroscope, REL_RZ,
-		ewtzmumid_data.gyro.z);/* z-axis of gyro sensor */
+		ewtzmumid_data.gyro.z);
 		report_enable = EW_REPORT_EN_GYROSCOPE;
 	}
 
@@ -719,8 +790,8 @@ static int EWTZMU2_Power_Off(void)
 		E("%s, ewtzmu_i2c_client < 0 \n", __func__);
 		return -2;
 	}
-	/*add how to power off ewtzmu2*/
-	if (gpio_get_value(ewtzmumid_data.sleep_pin) == 0) {/*no sleep*/
+	
+	if (gpio_get_value(ewtzmumid_data.sleep_pin) == 0) {
 		databuf[0] = EWTZMU_REG_PWR_MGM;
 		databuf[1] = EWTZMU_SLEP;
 		res = i2c_master_send(ewtzmu_i2c_client, databuf, 2);
@@ -728,7 +799,10 @@ static int EWTZMU2_Power_Off(void)
 			E("Fail to power off chipset(I2C error): ret value=%d\n", res);
 		msleep(10);
 	}
-	gpio_set_value(ewtzmumid_data.sleep_pin, 1);/*after any i2c cmd*/
+	gpio_set_value(ewtzmumid_data.sleep_pin, 1);
+
+	NACK_count = 0;
+
 	I("%s\n", __func__);
 	return 0;
 }
@@ -744,23 +818,33 @@ static int EWTZMU2_Power_On(void)
 		E("%s, ewtzmu_i2c_client < 0 \n", __func__);
 	return -2;
 	}
-	gpio_set_value(ewtzmumid_data.sleep_pin, 0);/*before any i2c cmd*/
-	msleep(10);
-	databuf[0] = EWTZMU_REG_PWR_MGM;
-	databuf[1] = EWTZMU_POWERON;
-	res = i2c_master_send(ewtzmu_i2c_client, databuf, 2);
-	if (res <= 0)
-	E("Fail to power on chipset(I2C error):ret value=%d\n", res);
-
+	gpio_set_value(ewtzmumid_data.sleep_pin, 0);
+	msleep(50);
+	while (1) {
+		databuf[0] = EWTZMU_REG_PWR_MGM;
+		databuf[1] = EWTZMU_POWERON;
+		res = i2c_master_send(ewtzmu_i2c_client, databuf, 2);
+		msleep(10);
+		if (res > 0 || i > 10) {
+			if (res <= 0)
+				E("Fail to power on chipset(I2C error):ret value=%d\n", res);
+			break;
+		}
+		i++;
+	}
+	i = 0;
 	I("%s start\n", __func__);
 	while (1) {
 		res = EWTZMU2_Chipset_Init();
+		msleep(10);
 		if (res == 0 || i > 3)
 			break;
 		i++;
 	}
+	i = 0;
 	EWTZMU2_Chip_Set_SampleRate(Gyro_samplerate_status);
 	I("%s end\n", __func__);
+	msleep(50);
 	return 0;
 }
 
@@ -905,8 +989,7 @@ static int ewtzmu2_release(struct inode *inode, struct file *file)
 	I("Release device node:ewtzmu2\n");
 	return 0;
 }
-/*for cailibration*/
-static long ewtzmu2_ioctl(/*struct inode *inode,*/struct file *file, unsigned int cmd, unsigned long arg)
+static long ewtzmu2_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 {
 	char strbuf[EW_BUFSIZE];
 	int controlbuf[EW_CB_LENGTH];
@@ -925,10 +1008,6 @@ static long ewtzmu2_ioctl(/*struct inode *inode,*/struct file *file, unsigned in
 	int i2creaddata[3];
 	int i2cwrdata[64];
 
-   /* if (!capable(CAP_SYS_ADMIN)) {
-	retval = -EPERM;
-	goto err_out;
-	}  */
 
 	switch (cmd) {
 
@@ -1151,7 +1230,7 @@ static long ewtzmu2_ioctl(/*struct inode *inode,*/struct file *file, unsigned in
 		Set_Report_Sensor_Flag(ewtzmumid_data.controldata[EW_CB_ACTIVESENSORS]);
 		if (!atomic_read(&g_status) && !atomic_read(&rv_status) &&
 		!atomic_read(&la_status) && !atomic_read(&gv_status) &&
-		!atomic_read(&o_status) && !atomic_read(&off_status_hal)) {/*power off*/
+		!atomic_read(&o_status) && !atomic_read(&off_status_hal)) {
 
 				atomic_set(&off_status_hal, 1);
 				I("cal_Gyro power off:g_status=%d"
@@ -1161,7 +1240,7 @@ static long ewtzmu2_ioctl(/*struct inode *inode,*/struct file *file, unsigned in
 				return EWTZMU2_Power_Off();
 			} else if ((atomic_read(&g_status) || atomic_read(&rv_status) ||
 			atomic_read(&la_status) || atomic_read(&gv_status) ||
-			atomic_read(&o_status))  && atomic_read(&off_status_hal)) {/*power on*/
+			atomic_read(&o_status))  && atomic_read(&off_status_hal)) {
 
 				atomic_set(&off_status_hal, 0);
 				I("Cal_Gyro power on:g_status=%d"
@@ -1307,8 +1386,6 @@ static long ewtzmu2_ioctl(/*struct inode *inode,*/struct file *file, unsigned in
 				goto err_out;
 			}
 
-			/*write buf order is reg_addr,
-			buf_len(unit:byte), data*/
 			I("%s: EW_IOCTL_WRITE_I2CDATA :"
 			"i2caddr=0x%x,len=%d,data=0x%x",
 			__func__, i2cwrdata[0],
@@ -1355,7 +1432,7 @@ static long ewtzmu2_ioctl(/*struct inode *inode,*/struct file *file, unsigned in
 				"R addr=0x%x,len=%d,data=0x%x",
 				__func__, ewtzmu_data.i2c_read_addr,
 				ewtzmu_data.i2c_read_len, i2cwrdata[0]);
-			if (retval) {/*successful*/
+			if (retval) {
 				if (copy_to_user(data,
 				i2cwrdata, ewtzmu_data.i2c_read_len)) {
 					retval = -EFAULT;
@@ -1415,7 +1492,7 @@ static int ewtzmu2daemon_release(struct inode *inode, struct file *file)
 
 
 
-static long ewtzmu2daemon_ioctl(/*struct inode *inode,*/
+static long ewtzmu2daemon_ioctl(
 struct file *file, unsigned int cmd,
 	unsigned long arg)
 {
@@ -1449,6 +1526,7 @@ struct file *file, unsigned int cmd,
 	break;
 
 	case EWDAE_IOCTL_SET_STANDBY:
+		EWTZMU2_GetOpenStatus();
 		break;
 
 	case EWDAE_IOCTL_GET_SENSORDATA:
@@ -1642,7 +1720,7 @@ struct file *file, unsigned int cmd,
 		}
 	break;
 
-	/*Add for input_device sync*/
+	
 	case EWDAE_IOCTL_SET_REPORT:
 		EWTZMU2_Report_Value();
 	break;
@@ -1775,8 +1853,6 @@ struct file *file, unsigned int cmd,
 				retval = -EFAULT;
 				goto err_out;
 			}
-			/*write buf order is reg_addr,
-			buf_len(unit:byte), data*/
 			I("%s: EWDAE_IOCTL_WRITE_I2CDATA :"
 			"i2caddr=0x%x,len=%d,data=0x%x",
 			__func__, i2cwrdata[0],
@@ -1820,7 +1896,7 @@ struct file *file, unsigned int cmd,
 				"R addr=0x%x,len=%d,data=0x%x",
 				__func__, ewtzmu_data.i2c_read_addr,
 				ewtzmu_data.i2c_read_len, i2cwrdata[0]);
-			if (retval) {/*successful*/
+			if (retval) {
 				if (copy_to_user(data, i2cwrdata,
 					ewtzmu_data.i2c_read_len)) {
 					retval = -EFAULT;
@@ -1874,13 +1950,13 @@ static int ewtzmu2hal_release(struct inode *inode, struct file *file)
     return 0;
 }
 
-static long ewtzmu2hal_ioctl(/*struct inode *inode,*/struct file *file, unsigned int cmd, unsigned long arg)
+static long ewtzmu2hal_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 {
 	int controlbuf[EW_CB_LENGTH];
 	char strbuf[EW_BUFSIZE];
 	int pedoparam[EW_PD_LENGTH];
 	 void __user *data;
-	int retval = 0;
+	int retval = 0, ret = 0;
 
 	DIF("ewtzmu2hal_ioctl, cmd is %d.\n", cmd);
 	switch (cmd) {
@@ -2004,7 +2080,7 @@ static long ewtzmu2hal_ioctl(/*struct inode *inode,*/struct file *file, unsigned
 				atomic_read(&la_status),
 				atomic_read(&gv_status));
 
-			if (!atomic_read(&g_status) && !atomic_read(&rv_status) && !atomic_read(&la_status) && !atomic_read(&gv_status) && !atomic_read(&o_status)) {/*power off*/
+			if (!atomic_read(&g_status) && !atomic_read(&rv_status) && !atomic_read(&la_status) && !atomic_read(&gv_status) && !atomic_read(&o_status)) {
 
 				I("Gyro power off:g_status=%d"
 					"off_status_hal=%d\n",
@@ -2012,9 +2088,9 @@ static long ewtzmu2hal_ioctl(/*struct inode *inode,*/struct file *file, unsigned
 				atomic_read(&off_status_hal));
 				if (!atomic_read(&off_status_hal)) {
 					atomic_set(&off_status_hal, 1);
-					return EWTZMU2_Power_Off();
+					ret = EWTZMU2_Power_Off();
 				}
-			} else if ((atomic_read(&g_status) || atomic_read(&rv_status) || atomic_read(&la_status) || atomic_read(&gv_status) || atomic_read(&o_status))) {/*power on*/
+			} else if ((atomic_read(&g_status) || atomic_read(&rv_status) || atomic_read(&la_status) || atomic_read(&gv_status) || atomic_read(&o_status))) {
 
 				I("Gyro power on:g_status=%d"
 					"off_status_hal=%d\n",
@@ -2022,9 +2098,16 @@ static long ewtzmu2hal_ioctl(/*struct inode *inode,*/struct file *file, unsigned
 					atomic_read(&off_status_hal));
 				if (atomic_read(&off_status_hal)) {
 					atomic_set(&off_status_hal, 0);
-					return EWTZMU2_Power_On();
+					ret = EWTZMU2_Power_On();
 				}
 			}
+			if (ewtzmumid_data.controldata[EW_CB_ACTIVESENSORS]) {
+				atomic_set(&open_flag, 1);
+				wake_up(&open_wq);
+			} else {
+				atomic_set(&open_flag, 0);
+			}
+			return ret;
 	break;
 
 	case EWHAL_IOCTL_GET_WIA:
@@ -2101,7 +2184,7 @@ static struct file_operations ewtzmu2_fops = {
     .owner = THIS_MODULE,
     .open = ewtzmu2_open,
     .release = ewtzmu2_release,
-    /*.ioctl = ewtzmu2_ioctl,*/
+    
 #if HAVE_COMPAT_IOCTL
 	.compat_ioctl = ewtzmu2_ioctl,
 #endif
@@ -2122,7 +2205,7 @@ static struct file_operations ewtzmu2daemon_fops = {
     .owner = THIS_MODULE,
     .open = ewtzmu2daemon_open,
     .release = ewtzmu2daemon_release,
-    /*.ioctl = ewtzmu2daemon_ioctl,*/
+    
 #if HAVE_COMPAT_IOCTL
 	.compat_ioctl = ewtzmu2daemon_ioctl,
 #endif
@@ -2142,7 +2225,7 @@ static struct file_operations ewtzmu2hal_fops = {
     .owner = THIS_MODULE,
     .open = ewtzmu2hal_open,
     .release = ewtzmu2hal_release,
-    /*.ioctl = ewtzmu2hal_ioctl,*/
+    
 #if HAVE_COMPAT_IOCTL
 	.compat_ioctl = ewtzmu2hal_ioctl,
 #endif
@@ -2169,74 +2252,74 @@ static int ewtzmu2_input_init(struct ewtzmu_i2c_data *data)
 	goto exit_input_dev_alloc_failed;
     }
     set_bit(EV_ABS, data->input_dev_compass->evbit);
-    /* yaw */
+    
     input_set_abs_params(data->input_dev_compass,
 	ABS_RX, 0, (360*10), 0, 0);
-    /* pitch */
+    
     input_set_abs_params(data->input_dev_compass,
 	ABS_RY, -(180*10), (180*10), 0, 0);
-    /* roll */
+    
     input_set_abs_params(data->input_dev_compass,
 	ABS_RZ, -(90*10), (90*10), 0, 0);
-    /* status of orientation sensor */
+    
     input_set_abs_params(data->input_dev_compass,
 	ABS_RUDDER, 0, 5, 0, 0);
 
-    /* x-axis of raw acceleration and the range is -2g to +2g */
+    
     input_set_abs_params(data->input_dev_compass, ABS_X,
 	-(1000*2), (1000*2), 0, 0);
 
-    /* y-axis of raw acceleration and the range is -2g to +2g */
+    
     input_set_abs_params(data->input_dev_compass, ABS_Y,
 	-(1000*2), (1000*2), 0, 0);
 
-    /* z-axis of raw acceleration and the range is -2g to +2g */
+    
     input_set_abs_params(data->input_dev_compass, ABS_Z,
 	-(1000*2), (1000*2), 0, 0);
 
 
-    /* x-axis of raw magnetic vector and the range is -3g to +3g */
+    
     input_set_abs_params(data->input_dev_compass, ABS_HAT0X,
 	-(1000*3), (1000*3), 0, 0);
-    /* y-axis of raw magnetic vector and the range is -3g to +3g */
+    
     input_set_abs_params(data->input_dev_compass, ABS_HAT0Y,
 	-(1000*3), (1000*3), 0, 0);
-    /* z-axis of raw magnetic vector and the range is -3g to +3g */
+    
     input_set_abs_params(data->input_dev_compass, ABS_BRAKE,
 	-(1000*3), (1000*3), 0, 0);
-    /* status of magnetic sensor */
+    
     input_set_abs_params(data->input_dev_compass, ABS_WHEEL,
 	0, 5, 0, 0);
-     /* x-axis of rotation vector */
+     
     input_set_abs_params(data->input_dev_compass, ABS_HAT3X,
 	-1000000, 1000000, 0, 0);
-    /* y-axis of rotation vector */
+    
     input_set_abs_params(data->input_dev_compass, ABS_HAT3Y,
 	-1000000, 1000000, 0, 0);
-    /* z-axis of rotation vector */
+    
     input_set_abs_params(data->input_dev_compass, ABS_TILT_X,
 	-1000000, 1000000, 0, 0);
-	/* theta of rotation vector */
+	
 	input_set_abs_params(data->input_dev_compass, ABS_TILT_Y,
 	-1000000, 1000000, 0, 0);
 
-    /* x-axis linear acceleration and the range is -2g to +2g */
+    
     input_set_abs_params(data->input_dev_compass, ABS_HAT1X,
 	-(1000*2), (1000*2), 0, 0);
-    /* y-axis linear acceleration and the range is -2g to +2g */
+    
     input_set_abs_params(data->input_dev_compass, ABS_HAT1Y,
 	-(1000*2), (1000*2), 0, 0);
-    /* z-axis linear acceleration and the range is -2g to +2g */
+    
     input_set_abs_params(data->input_dev_compass, ABS_TOOL_WIDTH,
 	-(1000*2), (1000*2), 0, 0);
 
-	/* x-axis gravity and the range is -2g to +2g */
+	
     input_set_abs_params(data->input_dev_compass, ABS_HAT2X,
 	-(1000*2), (1000*2), 0, 0);
-    /* y-axis gravity and the range is -2g to +2g */
+    
     input_set_abs_params(data->input_dev_compass,
 	ABS_HAT2Y, -(1000*2), (1000*2), 0, 0);
-    /* z-axis gravity and the range is -2g to +2g */
+    
     input_set_abs_params(data->input_dev_compass,
 	ABS_VOLUME, -(1000*2), (1000*2), 0, 0);
 
@@ -2320,6 +2403,13 @@ static ssize_t pana_gyro_store(struct device *dev,
 		ewtzmumid_data.controldata[EW_CB_ALGORITHMLOG] = 0;
 		debug_flag = 0;
 	}
+#ifdef FORCE_POWER_OFF
+	if (ewtzmumid_data.power_off != NULL) {
+		ewtzmumid_data.power_off(pana_gyro_enable);
+		I("%s: Turn power on purpose: pana_gyro_enable = %d\n",
+			__func__, pana_gyro_enable);
+	}
+#endif
 	D("%s: pana_gyro_enable  = %d\n", __func__, pana_gyro_enable);
 
 	return count;
@@ -2400,33 +2490,33 @@ const struct i2c_device_id *id)
     if (err)
 	goto exit_kfree;
 
-	/*set sensor dir and polarity*/
+	
      ewtzmu2_dir_polarity(data);
      err = pana_gyro_registerAttr();
      if (err) {
 		E("%s: pana_gyro_registerAttr failed\n", __func__);
 		goto exit_registerAttr_failed;
       }
-    /*register misc device:ewtzmu2*/
+    
     err = misc_register(&ewtzmu2_device);
     if (err) {
 	E("ewtzmu2_device register failed\n");
 	goto exit_misc_device_register_failed;
     }
-    /*register misc device:ewtzmu2daemon*/
+    
     err = misc_register(&ewtzmu2daemon_device);
     if (err) {
 	E("ewtzmu2daemon_device register failed\n");
 	goto exit_misc_device_register_failed;
     }
-    /*register misc device:ewtzmu2hal*/
+    
     err = misc_register(&ewtzmu2hal_device);
     if (err) {
 	E("ewtzmu2hal_device register failed\n");
 	goto exit_misc_device_register_failed;
     }
 
-    /* Register sysfs hooks */
+    
     err = sysfs_create_group(&client->dev.kobj, &ewtzmu2_attribute_group);
     if (err)
 	goto exit_sysfs_create_group_failed;
@@ -2437,7 +2527,16 @@ const struct i2c_device_id *id)
 	atomic_set(&off_status_hal, 1);
 	EWTZMU2_Power_Off();
 
-     I("PANA:GYRO:probe success\n");
+	init_waitqueue_head(&open_wq);
+
+	NACK_count = 0;
+
+#ifdef FORCE_POWER_OFF
+	if (data->pdata->power_off != NULL)
+		ewtzmumid_data.power_off = data->pdata->power_off;
+#endif
+
+	I("PANA:GYRO: NACK workaround probe success\n");
 
     return 0;
 exit_sysfs_create_group_failed:
@@ -2474,7 +2573,7 @@ static int ewtzmu2_suspend(struct i2c_client *client, pm_message_t mesg)
 		I("Gyro sys off on:g_status=%d off_status=%d\n",
 			atomic_read(&g_status),
 			atomic_read(&off_status));
-		/*return EWTZMU2_Power_Off();*//*control by hal*/
+		
 	}
 	I("GyroB sys off on:g_status=%d off_status=%d\n",
 		atomic_read(&g_status),
@@ -2489,7 +2588,7 @@ static int ewtzmu2_resume(struct i2c_client *client)
 		I("Gyro sys on on:g_status=%d off_status=%d\n",
 			atomic_read(&g_status),
 			atomic_read(&off_status));
-		/*return EWTZMU2_Power_On();*//*control by hal*/
+		
 	}
 	I("GyroB sys off on:g_status=%d off_status=%d\n",
 		atomic_read(&g_status),
