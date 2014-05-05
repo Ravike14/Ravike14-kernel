@@ -389,7 +389,8 @@ void msm_restart(char mode, const char *cmd)
 	flush_cache_all();
 
 	__raw_writel(0, msm_tmr0_base + WDT0_EN);
-	if (!(machine_is_msm8x60_fusion() || machine_is_msm8x60_fusn_ffa())) {
+	if (!(machine_is_msm8x60_fusion() || machine_is_msm8x60_fusn_ffa() ||
+	      machine_is_ruby())) { /*since porting the stock htc code is difficult i'm using the aosp mdm9k cache flush*/
 		mb();
 		__raw_writel(0, PSHOLD_CTL_SU); 
 		mdelay(5000);
