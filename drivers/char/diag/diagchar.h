@@ -221,7 +221,6 @@ struct diagchar_dev {
 	struct mutex smd_lock;
 	unsigned char init_done;
 	unsigned char is2ARM11;
-	int debug_dmbytes_recv;
 #endif
 #ifdef CONFIG_DIAG_SDIO_PIPE
 	unsigned char *buf_in_sdio_1;

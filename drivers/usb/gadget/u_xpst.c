@@ -80,7 +80,7 @@ static int diag2arm9query;
 
 static struct diag_context *get_modem_ctxt(void)
 {
-#if defined(CONFIG_ARCH_APQ8064)
+#if defined(CONFIG_ARCH_MSM8X60_LTE) || defined(CONFIG_ARCH_APQ8064)
 	return &_mdm_context;
 #else
 	return &_context;
@@ -393,7 +393,7 @@ static long htc_diag_ioctl(struct file *file, unsigned int cmd, unsigned long ar
 		if (copy_from_user(&tmp_value, argp, sizeof(int)))
 			return -EFAULT;
 		DIAG_INFO("diag: enable %d\n", tmp_value);
-#if defined(CONFIG_MACH_VIGOR) || defined(CONFIG_ARCH_APQ8064)
+#if defined(CONFIG_MACH_VIGOR) || defined(CONFIG_ARCH_APQ8064) || defined(CONFIG_ARCH_MSM8X60_LTE)
 		htc_usb_enable_function(DIAG_MDM, tmp_value);
 #endif
 		htc_usb_enable_function(DIAG_LEGACY, tmp_value);
@@ -1212,8 +1212,8 @@ static ssize_t diag2arm9_write(struct file *fp, const char __user *buf,
 		if (count)
 			DIAG_INFO("%s :[WARN] count = %d\n", __func__, count);
 
-	}
-	driver->debug_dmbytes_recv = DEBUG_DMBYTES_RECV;
+	}	
+//	driver->debug_dmbytes_recv = DEBUG_DMBYTES_RECV;
 	mutex_unlock(&ctxt->diag2arm9_write_lock);
 
 	return r;

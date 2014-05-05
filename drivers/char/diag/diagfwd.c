@@ -76,21 +76,14 @@ do {									\
 #define CHK_OVERFLOW(bufStart, start, end, length) \
 ((bufStart <= start) && (end - start >= length)) ? 1 : 0
 
-int chk_config_get_id(void)
+int chk_config_get_id()
 {
 	switch (socinfo_get_id()) {
 	case APQ8060_MACHINE_ID:
 	case MSM8660_MACHINE_ID:
 		return APQ8060_TOOLS_ID;
 	case AO8960_MACHINE_ID:
-	case MSM8260A_MACHINE_ID:
 		return AO8960_TOOLS_ID;
-	case APQ8064_MACHINE_ID:
-		return APQ8064_TOOLS_ID;
-	case MSM8930_MACHINE_ID:
-		return MSM8930_TOOLS_ID;
-	case MSM8974_MACHINE_ID:
-		return MSM8974_TOOLS_ID;
 	default:
 		return 0;
 	}
