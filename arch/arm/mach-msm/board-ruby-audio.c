@@ -378,6 +378,10 @@ int ruby_get_rx_vol(uint8_t hw, int network, int level)
 	return vol;
 }
 
+void ruby_voltage_on (int en)
+{
+}
+
 void ruby_rx_amp_enable(int en)
 {
 	if (curr_rx_mode != 0) {
@@ -471,6 +475,7 @@ static struct q6v2audio_analog_ops ops = {
 	.fm_headset_enable      = ruby_snddev_fmhs_pamp_on,
 	.fm_speaker_enable      = ruby_snddev_fmspk_pamp_on,
 	.usb_headset_enable     = ruby_usb_headset_on,
+	.voltage_on             = ruby_voltage_on,
 };
 
 static struct q6v2audio_icodec_ops iops = {

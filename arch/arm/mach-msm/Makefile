@@ -107,7 +107,7 @@ ifndef CONFIG_ARCH_MSM8960
 ifndef CONFIG_ARCH_MSM8X60
 ifndef CONFIG_ARCH_MSM8974
 	obj-$(CONFIG_MSM_SMD) += pmic.o
-	obj-$(CONFIG_MSM_ONCRPCROUTER) += rpc_hsusb.o rpc_fsusb.o
+	obj-$(CONFIG_MSM_ONCRPCROUTER) += rpc_hsusb.o rpc_pmapp.o rpc_fsusb.o
 endif
 endif
 endif
@@ -146,7 +146,6 @@ obj-$(CONFIG_MSM_ONCRPCROUTER) += smd_rpcrouter_servers.o
 obj-$(CONFIG_MSM_ONCRPCROUTER) += smd_rpcrouter_clients.o
 obj-$(CONFIG_MSM_ONCRPCROUTER) += smd_rpcrouter_xdr.o
 obj-$(CONFIG_MSM_ONCRPCROUTER) += rpcrouter_smd_xprt.o
-#obj-$(CONFIG_MSM_ONCRPCROUTER) += rpc_pmapp.o
 obj-$(CONFIG_MSM_RPC_SDIO_XPRT) += rpcrouter_sdio_xprt.o
 obj-$(CONFIG_MSM_RPC_PING) += ping_mdm_rpc_client.o
 obj-$(CONFIG_MSM_RPC_PROC_COMM_TEST) += proc_comm_test.o
@@ -451,7 +450,11 @@ obj-$(CONFIG_MSM_RPC_VIBRATOR) += msm_vibrator.o
 ifdef CONFIG_ARCH_APQ8064
 	obj-$(CONFIG_MSM_NATIVE_RESTART) += restart-apq8064.o
 else
+ifdef CONFIG_ARCH_MSM8X60_LTE
+    obj-$(CONFIG_MSM_NATIVE_RESTART) += restart-apq8060.o
+else
 	obj-$(CONFIG_MSM_NATIVE_RESTART) += restart.o
+endif
 endif
 obj-$(CONFIG_MSM_NATIVE_RESTART) += htc_restart_handler.o
 

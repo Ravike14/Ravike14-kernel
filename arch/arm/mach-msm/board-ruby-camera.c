@@ -681,6 +681,7 @@ static struct msm_camera_sensor_info msm_camera_sensor_s5k3h2yx_data = {
 	.flash_data	= &flash_s5k3h2yx,
 	.sensor_platform_info = &sensor_s5k3h2yx_board_info,
 	.csi_if	= 1,
+	.gpio_set_value_force = 1,
 	.camera_type = BACK_CAMERA_2D,
 #ifdef CONFIG_S5K3H2YX_ACT
 	.actuator_info = &s5k3h2yx_actuator_info,

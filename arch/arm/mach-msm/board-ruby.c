@@ -88,10 +88,10 @@
 #include <mach/msm_battery.h>
 #ifdef CONFIG_USB_MSM_OTG_72K
 #include <mach/msm_hsusb.h>
-#else
-#include <linux/usb/msm_hsusb.h>
 #endif
+#include <linux/usb/msm_hsusb.h>
 #include <mach/htc_usb.h>
+#include <linux/usb/android_composite.h>
 #include <mach/gpiomux.h>
 #ifdef CONFIG_MSM_DSPS
 #include <mach/msm_dsps.h>
@@ -179,6 +179,13 @@
 #define MSM_ION_WB_BASE       0x46400000
 #define MSM_ION_AUDIO_BASE    0x7FB00000
 #define MSM_SHARED_RAM_PHYS 0x40000000
+
+#define MIPI_CMD_NOVATEK_QHD_PANEL_NAME	"mipi_cmd_novatek_qhd"
+#define MIPI_VIDEO_NOVATEK_QHD_PANEL_NAME	"mipi_video_novatek_qhd"
+#define MIPI_VIDEO_TOSHIBA_WVGA_PANEL_NAME	"mipi_video_toshiba_wvga"
+
+#define DSPS_PIL_GENERIC_NAME		"dsps"
+#define DSPS_PIL_FLUID_NAME		"dsps_fluid"
 
 #ifdef CONFIG_CPU_FREQ_GOV_ONDEMAND_2_PHASE
 int set_two_phase_freq(int cpufreq);
@@ -530,7 +537,6 @@ static unsigned ruby_perf_acpu_table[] = {
 	1728000000,
 	1782000000,
 };
-
 static struct perflock_data ruby_perflock_data = {
 	.perf_acpu_table = ruby_perf_acpu_table,
 	.table_size = ARRAY_SIZE(ruby_perf_acpu_table),
@@ -979,12 +985,14 @@ static struct msm_pm_boot_platform_data msm_pm_boot_pdata __initdata = {
 	.mode = MSM_PM_BOOT_CONFIG_TZ,
 };
 
+static int msm_hsusb_vbus_power(bool on);
 static int ruby_phy_init_seq[] = { 0x06, 0x36, 0x0C, 0x31, 0x31, 0x32, 0x1, 0x0D, 0x1, 0x10, -1 };
 static struct msm_otg_platform_data msm_otg_pdata = {
 	.phy_init_seq	= ruby_phy_init_seq,
 	.mode		= USB_OTG,
 	.otg_control	= OTG_PMIC_CONTROL,
-	.phy_type	= CI_45NM_INTEGRATED_PHY,
+	.phy_type	= CI_45NM_INTEGRATED_PHY,	
+	.vbus_power		= msm_hsusb_vbus_power,	
 	.power_budget	= 750,
 	.ldo_3v3_name	= "8058_l6",
 	.ldo_1v8_name	= "8058_l7",
@@ -1055,6 +1063,7 @@ static struct android_usb_platform_data android_usb_pdata = {
 	.num_functions = ARRAY_SIZE(usb_functions_all),
 	.functions = usb_functions_all,
 	.update_pid_and_serial_num = usb_diag_update_pid_and_serial_num,
+	.usb_diag_interface = "diag,diag_mdm",
 	.fserial_init_string = "sdio:modem,tty,tty,tty:serial,tty:autobot",
 	.nluns = 2,
 	.usb_id_pin_gpio = RUBY_GPIO_USB_ID,
@@ -1594,6 +1603,39 @@ static int hdmi_panel_power(int on)
 	pr_debug("%s: HDMI Core: %s Success\n", __func__, (on ? "ON" : "OFF"));
 	return rc;
 }
+#define BOOST_5V	"ext_5v"
+static struct regulator *reg_boost_5v = NULL;
+static int msm_hsusb_vbus_power(bool on)
+{
+	static int prev_on;
+	int rc;
+
+	if (on == prev_on)
+		return 0;
+
+	if (!reg_boost_5v)
+		_GET_REGULATOR(reg_boost_5v, BOOST_5V);
+
+	if (on) {
+		rc = regulator_enable(reg_boost_5v);
+		if (rc) {
+			pr_err("'%s' regulator enable failed, rc=%d\n",
+				BOOST_5V, rc);
+			return rc;
+		}
+	} else {
+		rc = regulator_disable(reg_boost_5v);
+		if (rc)
+			pr_warning("'%s' regulator disable failed, rc=%d\n",
+				BOOST_5V, rc);
+	}
+
+	pr_info("%s(%s): success\n", __func__, on?"on":"off");
+
+	prev_on = on;
+
+	return 0;
+}
 #undef _GET_REGULATOR
 
 #endif
@@ -1722,6 +1764,9 @@ static int __init check_dq_setup(char *str)
 		tps65200_data.dq_result = 1;
 	else
 		tps65200_data.dq_result = 0;
+		
+	if (system_rev == XE)
+		tps65200_data.dq_result = 1;		
 
 	return 1;
 }
@@ -3095,10 +3140,15 @@ static void __init pm8901_vreg_mpp0_init(void)
 			.level	= PM8901_MPP_DIG_LEVEL_VPH,
 		},
 	};
-
+	
+	if (machine_is_ruby()) {
+		msm_gpio_regulator_pdata[GPIO_VREG_ID_EXT_5V].active_low = 1;
+		pm8901_vreg_mpp0.config.control = PM8XXX_MPP_DOUT_CTRL_HIGH;
+	} else {
 		msm_gpio_regulator_pdata[GPIO_VREG_ID_EXT_5V].active_low = 0;
 		pm8901_vreg_mpp0.config.control = PM8XXX_MPP_DOUT_CTRL_LOW;
-
+	}
+	
 	rc = pm8xxx_mpp_config(pm8901_vreg_mpp0.mpp, &pm8901_vreg_mpp0.config);
 	if (rc)
 		pr_err("%s: pm8xxx_mpp_config: rc=%d\n", __func__, rc);
@@ -3132,6 +3182,28 @@ static struct platform_device scm_log_device = {
 
 #ifdef CONFIG_ION_MSM
 static struct platform_device ion_dev;
+#endif
+
+#ifdef CONFIG_FB_MSM_MIPI_DSI
+static struct platform_device mipi_dsi_toshiba_panel_device = {
+	.name = "mipi_toshiba",
+	.id = 0,
+};
+
+#define FPGA_3D_GPIO_CONFIG_ADDR	0x1D00017A
+
+static struct mipi_dsi_panel_platform_data novatek_pdata = {
+	.fpga_3d_config_addr  = FPGA_3D_GPIO_CONFIG_ADDR,
+	.fpga_ctrl_mode = FPGA_EBI2_INTF,
+};
+
+static struct platform_device mipi_dsi_novatek_panel_device = {
+	.name = "mipi_novatek",
+	.id = 0,
+	.dev = {
+		.platform_data = &novatek_pdata,
+	}
+};
 #endif
 
 static struct platform_device *ruby_devices[] __initdata = {
@@ -3210,6 +3282,10 @@ static struct platform_device *ruby_devices[] __initdata = {
 	&msm_device_tsif[0],
 #endif 
 #endif 
+#ifdef CONFIG_FB_MSM_MIPI_DSI
+	&mipi_dsi_toshiba_panel_device,
+	&mipi_dsi_novatek_panel_device,
+#endif
 #if defined(CONFIG_CRYPTO_DEV_QCRYPTO) || \
 		defined(CONFIG_CRYPTO_DEV_QCRYPTO_MODULE)
 	&qcrypto_device,
@@ -5246,7 +5322,10 @@ int sdc2_register_status_notify(void (*callback)(int, void *),
 static irqreturn_t msm8x60_multi_sdio_slot_status_irq(int irq, void *dev_id)
 {
 	int status;
-
+	/*added today 07/03/14 */
+	if (!machine_is_ruby())
+	return IRQ_NONE;
+    /*added today 07/03/14 */
 	status = gpio_get_value(RUBY_MDM2AP_SYNC);
 	pr_info("%s: MDM2AP_SYNC Status = %d\n",
 		 __func__, status);
@@ -5272,7 +5351,8 @@ static irqreturn_t msm8x60_multi_sdio_slot_status_irq(int irq, void *dev_id)
 static int msm8x60_multi_sdio_init(void)
 {
 	int ret, irq_num;
-
+	if (!machine_is_ruby())
+		return 0;	
 	ret = msm_gpiomux_get(RUBY_MDM2AP_SYNC);
 	if (ret) {
 		pr_err("%s:Failed to request GPIO %d, ret=%d\n",

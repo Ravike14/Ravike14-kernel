@@ -1,6 +1,6 @@
 /* Copyright (c) 2010-2011, Code Aurora Forum. All rights reserved.
  * Copyright (c) 2013 Sebastian Sobczyk <sebastiansobczyk@wp.pl>
- * Modified (c) 2013 Ravishka Fernando <rn.fernando3@gmail.com>
+ * Modified 2013 Ravishka Fernando <rn.fernando3@gmail.com>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
