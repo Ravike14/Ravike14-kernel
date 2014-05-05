@@ -955,6 +955,7 @@ uint32_t htc_dump_vdd_min_time(uint32_t suspend_start, uint32_t resume_start)
 	return msm_rpm_stat_data->sw_done_exit_time;
 }
 #endif
+
 int htc_get_xo_vdd_min_info(uint32_t* xo_count, uint64_t* xo_time, uint32_t* vddmin_count, uint64_t* vddmin_time )
 {
 	if(!msm_rpm_stat_data)

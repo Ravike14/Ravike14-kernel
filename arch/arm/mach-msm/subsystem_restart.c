@@ -39,11 +39,11 @@
 #include <mach/htc_restart_handler.h>
 
 
-#if defined(CONFIG_ARCH_APQ8064)
+#if defined(CONFIG_ARCH_MSM8X60_LTE) || defined(CONFIG_ARCH_APQ8064) 
   #define EXTERNAL_MODEM "external_modem"
   #define SZ_DIAG_ERR_MSG 	0xC8
 
-  extern char *get_mdm_errmsg(void);
+//  extern char *get_mdm_errmsg(void);
 #endif
 
 
