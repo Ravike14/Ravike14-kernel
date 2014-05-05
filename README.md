@@ -4,5 +4,5 @@ google aosp 4.6 toochain
                    
 for tiwlan compat-wirelesss source compilation and correct modules
 
-./modules_sp7.sh
+./modules_r8.sh
 
