@@ -13,17 +13,6 @@
  *
  */
 
-#include <linux/err.h>
-#include <linux/types.h>
-#include <linux/uaccess.h>
-#include <linux/fs.h>
-#include <linux/init.h>
-#include <linux/kernel.h>
-#include <linux/miscdevice.h>
-#include <linux/module.h>
-#include <linux/rfkill.h>
-#include <linux/clk.h>
-#include <linux/slab.h>
 #include <linux/delay.h>
 #include <linux/device.h>
 #include <linux/module.h>
@@ -53,20 +42,19 @@ static uint32_t ruby_bt_on_table[] = {
 				GPIO_CFG_INPUT,
 				GPIO_CFG_PULL_UP,
 				GPIO_CFG_8MA),
-	
+
 	GPIO_CFG(RUBY_GPIO_BT_UART1_RX,
 				1,
 				GPIO_CFG_INPUT,
 				GPIO_CFG_PULL_UP,
 				GPIO_CFG_8MA),
-
+	
 	GPIO_CFG(RUBY_GPIO_BT_UART1_TX,
 				1,
 				GPIO_CFG_OUTPUT,
 				GPIO_CFG_NO_PULL,
 				GPIO_CFG_8MA),
 
-	
 	GPIO_CFG(RUBY_GPIO_BT_EN,
 				0,
 				GPIO_CFG_OUTPUT,
@@ -77,13 +65,13 @@ static uint32_t ruby_bt_on_table[] = {
 
 static uint32_t ruby_bt_off_table[] = {
 
-
+	
 	GPIO_CFG(RUBY_GPIO_BT_UART1_RTS,
 				0,
 				GPIO_CFG_OUTPUT,
 				GPIO_CFG_NO_PULL,
 				GPIO_CFG_8MA),
-
+	
 	GPIO_CFG(RUBY_GPIO_BT_UART1_CTS,
 				0,
 				GPIO_CFG_INPUT,
@@ -95,7 +83,7 @@ static uint32_t ruby_bt_off_table[] = {
 				GPIO_CFG_INPUT,
 				GPIO_CFG_PULL_UP,
 				GPIO_CFG_8MA),
-
+	
 	GPIO_CFG(RUBY_GPIO_BT_UART1_TX,
 				0,
 				GPIO_CFG_OUTPUT,
@@ -137,7 +125,6 @@ static void ruby_config_bt_on(void)
 
 	gpio_set_value(RUBY_GPIO_BT_EN, 1);
 
-
 }
 
 static void ruby_config_bt_off(void)
@@ -155,11 +142,10 @@ static void ruby_config_bt_off(void)
 	gpio_set_value(RUBY_GPIO_BT_UART1_RTS, 1);
 
 	mdelay(4);
-	
+
 	gpio_set_value(RUBY_GPIO_BT_UART1_TX, 1);
 
 	mdelay(4);
-
 
 }
 
@@ -209,7 +195,6 @@ static int ruby_rfkill_probe(struct platform_device *pdev)
 	}
 
 	rfkill_set_states(bt_rfk, default_state, false);
-
 
 	rc = rfkill_register(bt_rfk);
 	if (rc)
