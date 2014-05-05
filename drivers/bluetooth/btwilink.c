@@ -29,6 +29,7 @@
 #include <net/bluetooth/hci.h>
 
 #include <linux/ti_wilink_st.h>
+#include <linux/module.h>
 
 /* Bluetooth Driver Version */
 #define VERSION               "1.0"
@@ -125,6 +126,13 @@ static long st_receive(void *priv_data, struct sk_buff *skb)
 /* protocol structure registered with shared transport */
 static struct st_proto_s ti_st_proto[MAX_BT_CHNL_IDS] = {
 	{
+		.chnl_id = HCI_EVENT_PKT, /* HCI Events */
+		.hdr_len = sizeof(struct hci_event_hdr),
+		.offset_len_in_hdr = offsetof(struct hci_event_hdr, plen),
+		.len_size = 1, /* sizeof(plen) in struct hci_event_hdr */
+		.reserve = 8,
+	},
+	{
 		.chnl_id = HCI_ACLDATA_PKT, /* ACL */
 		.hdr_len = sizeof(struct hci_acl_hdr),
 		.offset_len_in_hdr = offsetof(struct hci_acl_hdr, dlen),
@@ -138,13 +146,6 @@ static struct st_proto_s ti_st_proto[MAX_BT_CHNL_IDS] = {
 		.len_size = 1, /* sizeof(dlen) in struct hci_sco_hdr */
 		.reserve = 8,
 	},
-	{
-		.chnl_id = HCI_EVENT_PKT, /* HCI Events */
-		.hdr_len = sizeof(struct hci_event_hdr),
-		.offset_len_in_hdr = offsetof(struct hci_event_hdr, plen),
-		.len_size = 1, /* sizeof(plen) in struct hci_event_hdr */
-		.reserve = 8,
-	},
 };
 
 /* Called from HCI core to initialize the device */
@@ -153,6 +154,7 @@ static int ti_st_open(struct hci_dev *hdev)
 	unsigned long timeleft;
 	struct ti_st *hst;
 	int err, i;
+
 	BT_DBG("%s %p", hdev->name, hdev);
 
 	if (test_and_set_bit(HCI_RUNNING, &hdev->flags))
@@ -175,6 +177,7 @@ static int ti_st_open(struct hci_dev *hdev)
 		 * function whenever it called from ST driver.
 		 */
 		hst->reg_status = -EINPROGRESS;
+
 		err = st_register(&ti_st_proto[i]);
 		if (!err)
 			goto done;
@@ -216,7 +219,6 @@ done:
 			BT_ERR("undefined ST write function");
 			clear_bit(HCI_RUNNING, &hdev->flags);
 			for (i = 0; i < MAX_BT_CHNL_IDS; i++) {
-				BT_DBG("In btwilink ti_st_open:: st_unregister");
 				/* Undo registration with ST */
 				err = st_unregister(&ti_st_proto[i]);
 				if (err)
@@ -236,11 +238,10 @@ static int ti_st_close(struct hci_dev *hdev)
 	int err, i;
 	struct ti_st *hst = hdev->driver_data;
 
-	pr_info("[BT]btwilink ti_st_close");
 	if (!test_and_clear_bit(HCI_RUNNING, &hdev->flags))
 		return 0;
 
-	for (i = 0; i < MAX_BT_CHNL_IDS; i++) {
+	for (i = MAX_BT_CHNL_IDS-1; i >= 0; i--) {
 		err = st_unregister(&ti_st_proto[i]);
 		if (err)
 			BT_ERR("st_unregister(%d) failed with error %d",
@@ -268,14 +269,16 @@ static int ti_st_send_frame(struct sk_buff *skb)
 	/* Prepend skb with frame type */
 	memcpy(skb_push(skb, 1), &bt_cb(skb)->pkt_type, 1);
 
-	BT_DBG("%s: type %d len %d", hdev->name, bt_cb(skb)->pkt_type,
-			skb->len);
 
 	/* Insert skb to shared transport layer's transmit queue.
 	 * Freeing skb memory is taken care in shared transport layer,
 	 * so don't free skb memory here.
 	 */
-	len = hst->st_write(skb);
+	if(hst->st_write != NULL)
+		len = hst->st_write(skb);
+	else
+		len = -1;
+
 	if (len < 0) {
 		kfree_skb(skb);
 		BT_ERR("ST write failed (%ld)", len);

@@ -48,7 +48,7 @@
 
 #define VERSION "2.2"
 
-static int reset = 0;
+static bool reset = 0;
 
 static struct hci_uart_proto *hup[HCI_UART_MAX_PROTO];
 
@@ -593,6 +593,9 @@ static void __exit hci_uart_exit(void)
 
 module_init(hci_uart_init);
 module_exit(hci_uart_exit);
+
+module_param(reset, bool, 0644);
+MODULE_PARM_DESC(reset, "Send HCI reset command on initialization");
 
 MODULE_AUTHOR("Marcel Holtmann <marcel@holtmann.org>");
 MODULE_DESCRIPTION("Bluetooth HCI UART driver ver " VERSION);
