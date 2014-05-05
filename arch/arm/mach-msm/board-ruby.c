@@ -5322,10 +5322,8 @@ int sdc2_register_status_notify(void (*callback)(int, void *),
 static irqreturn_t msm8x60_multi_sdio_slot_status_irq(int irq, void *dev_id)
 {
 	int status;
-	/*added today 07/03/14 */
 	if (!machine_is_ruby())
 	return IRQ_NONE;
-    /*added today 07/03/14 */
 	status = gpio_get_value(RUBY_MDM2AP_SYNC);
 	pr_info("%s: MDM2AP_SYNC Status = %d\n",
 		 __func__, status);
